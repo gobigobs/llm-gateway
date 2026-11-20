@@ -1,0 +1,35 @@
+# TEST ONLY config for scripts/verify.py — fallback proof.
+# Primary points at a model that does NOT exist, so every request must
+# fall back to qwen2.5:3b-instruct. Never used by run.sh.
+server:
+  host: "127.0.0.1"
+  port: 8001
+ollama:
+  base_url: "http://localhost:11434"
+  timeout_seconds: 300
+models:
+  primary:
+    gateway_name: "qwen2.5-3b"
+    ollama_model: "does-not-exist:latest"
+    aliases: ["chat", "default"]
+  fallback:
+    gateway_name: "qwen2.5-3b-fallback"
+    ollama_model: "qwen2.5:3b-instruct"
+    aliases: ["fallback"]
+auth:
+  keys:
+    - key: "demo-key-12345"
+      name: "demo"
+      note: "DEMO key"
+      requests_per_minute: 60
+rate_limit:
+  default_requests_per_minute: 30
+cache:
+  enabled: true
+  ttl_seconds: 3600
+pricing_inr_per_1k_tokens:
+  "qwen2.5-3b": { prompt: 0.0, completion: 0.0 }
+  "qwen2.5-3b-fallback": { prompt: 0.0, completion: 0.0 }
+  "default": { prompt: 0.0, completion: 0.0 }
+storage:
+  db_path: "data/gateway-test-fallback.db"

@@ -1,0 +1,489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="llm-gateway — one OpenAI-compatible API in front of local Ollama models. Repeat questions answer themselves: exact-match caching, automatic fallback, per-key rate limits, cost tracking.">
+<title>llm-gateway — Repeat questions answer themselves</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* ——— Luxury bar: dark-first, one accent, restraint ——— */
+  :root {
+    --bg: #0A0B0C;            /* near-black, never pure #000 */
+    --surface: #121317;
+    --surface-2: #17191D;
+    --surface-3: #1E2126;
+    --line: rgba(250, 247, 242, 0.09);
+    --text: #FAF7F2;          /* warm off-white */
+    --muted: #9B978F;         /* warm grey, ≥4.5:1 on --surface */
+    --faint: #6E6B64;
+    --gold: #C9A84C;          /* the one accent — muted gold */
+    --gold-soft: rgba(201, 168, 76, 0.14);
+    --gold-line: rgba(201, 168, 76, 0.35);
+    --gold-deep: #A98A38;
+    --hit: #C9A84C;           /* cache hit = gold, the hero metric */
+    --ok: #7FB069;            /* muted green, status only */
+    --warn: #D9A441;          /* muted amber, status only */
+    --bad: #D96A5F;           /* muted red, status only */
+    --radius: 20px;
+    --radius-sm: 12px;
+    --shadow: 0 1px 0 rgba(250,247,242,.04) inset, 0 12px 32px -12px rgba(0,0,0,.65);
+    --shadow-lift: 0 1px 0 rgba(250,247,242,.05) inset, 0 20px 48px -16px rgba(0,0,0,.8);
+    --font: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    font-family: var(--font);
+    font-size: 16px;
+    line-height: 1.6;
+    background: var(--bg);
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+    /* ambient glow — one soft gold wash, top only */
+    background-image:
+      radial-gradient(720px 340px at 50% -8%, rgba(201,168,76,.10), transparent 70%),
+      radial-gradient(560px 300px at 88% 4%, rgba(201,168,76,.05), transparent 70%);
+    background-attachment: fixed;
+  }
+  ::selection { background: var(--gold); color: #0A0B0C; }
+
+  /* ——— glass top bar ——— */
+  .topbar {
+    position: sticky; top: 0; z-index: 20;
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+    background: rgba(10, 11, 12, 0.72);
+    border-bottom: 1px solid var(--line);
+  }
+  .topbar-inner {
+    max-width: 1160px; margin: 0 auto; padding: 14px 24px;
+    display: flex; align-items: center; gap: 16px;
+  }
+  .brand { font-weight: 800; font-size: 17px; letter-spacing: -0.02em; }
+  .brand em { font-style: normal; color: var(--gold); }
+  .brand-sub { font-family: var(--mono); font-size: 11px; color: var(--faint); letter-spacing: .08em; text-transform: uppercase; }
+  .topbar-spacer { flex: 1; }
+  .live {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--mono); font-size: 12px; color: var(--muted);
+    border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px;
+    background: rgba(18, 19, 23, 0.6);
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 0 rgba(127,176,105,.5); animation: pulse 2.4s infinite; }
+  .dot.down { background: var(--bad); animation: none; }
+  @keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(127,176,105,.45); } 70% { box-shadow: 0 0 0 7px rgba(127,176,105,0); } 100% { box-shadow: 0 0 0 0 rgba(127,176,105,0); } }
+
+  .wrap { max-width: 1160px; margin: 0 auto; padding: 0 24px; }
+
+  /* ——— hero: outcome first, playground is the hero ——— */
+  header.hero { padding: 64px 0 8px; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; letter-spacing: .14em; text-transform: uppercase;
+    color: var(--gold); display: flex; align-items: center; gap: 10px; margin: 0 0 20px;
+  }
+  .eyebrow::before { content: ""; width: 28px; height: 1px; background: var(--gold); }
+  h1 {
+    margin: 0; max-width: 16ch;
+    font-size: clamp(40px, 6vw, 64px); line-height: 1.04; letter-spacing: -0.035em; font-weight: 800;
+  }
+  h1 .gold { color: var(--gold); }
+  .lede { margin: 20px 0 0; max-width: 56ch; font-size: 18px; line-height: 1.6; color: var(--muted); }
+  .lede code { font-family: var(--mono); font-size: .85em; color: var(--text); background: var(--surface-3); padding: 2px 7px; border-radius: 6px; border: 1px solid var(--line); }
+  .hero-cta { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-top: 28px; }
+  .cta {
+    display: inline-flex; align-items: center; gap: 8px;
+    background: var(--gold); color: #0A0B0C; border: 0; border-radius: 999px;
+    padding: 13px 24px; font: 600 15px var(--font); letter-spacing: -0.01em; cursor: pointer;
+    box-shadow: 0 8px 24px -8px rgba(201,168,76,.55);
+    transition: transform 200ms ease-out, box-shadow 200ms ease-out, background 200ms ease-out;
+  }
+  .cta:hover { transform: translateY(-1px); background: #D9BC63; box-shadow: 0 12px 32px -8px rgba(201,168,76,.65); }
+  .cta:active { transform: translateY(0) scale(.98); transition-duration: 150ms; }
+  .cta-note { font-family: var(--mono); font-size: 12px; color: var(--faint); }
+  .cta-note b { color: var(--muted); font-weight: 500; }
+
+  /* pipeline strip — one line, mono, the whole product in six words */
+  .pipeline {
+    margin: 40px 0 0; padding: 16px 4px;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px 0;
+    border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+    font-family: var(--mono); font-size: 12.5px; color: var(--muted); letter-spacing: .02em;
+  }
+  .pipeline span { padding: 0 2px; }
+  .pipeline .arrow { color: var(--gold); padding: 0 10px; }
+  .pipeline .hot { color: var(--gold); }
+
+  /* ——— reveal on load (respects reduced motion) ——— */
+  .reveal { animation: rise 600ms cubic-bezier(.22,1,.36,1) both; }
+  .reveal.d1 { animation-delay: 80ms; } .reveal.d2 { animation-delay: 160ms; }
+  .reveal.d3 { animation-delay: 240ms; } .reveal.d4 { animation-delay: 320ms; }
+  @keyframes rise { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: translateY(0); } }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation: none !important; transition: none !important; }
+    html { scroll-behavior: auto; }
+  }
+
+  /* ——— bento stats ——— */
+  .bento {
+    display: grid; gap: 14px; margin-top: 32px;
+    grid-template-columns: repeat(4, 1fr);
+    grid-template-areas:
+      "hit hit total tokens"
+      "hit hit fallback cost";
+  }
+  @media (max-width: 860px) {
+    .bento { grid-template-columns: repeat(2, 1fr); grid-template-areas: "hit hit" "total tokens" "fallback cost"; }
+  }
+  @media (max-width: 520px) {
+    .bento { grid-template-columns: 1fr; grid-template-areas: "hit" "total" "tokens" "fallback" "cost"; }
+  }
+  .tile {
+    background: linear-gradient(180deg, var(--surface-2), var(--surface));
+    border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 22px; box-shadow: var(--shadow);
+    transition: transform 200ms ease-out, border-color 200ms ease-out, box-shadow 200ms ease-out;
+  }
+  .tile:hover { transform: translateY(-2px); border-color: rgba(250,247,242,.16); box-shadow: var(--shadow-lift); }
+  .tile.hero-tile {
+    grid-area: hit;
+    background:
+      radial-gradient(420px 200px at 85% 0%, var(--gold-soft), transparent 70%),
+      linear-gradient(180deg, var(--surface-2), var(--surface));
+    border-color: var(--gold-line);
+    display: flex; flex-direction: column; justify-content: space-between; min-height: 208px;
+  }
+  .tile.total { grid-area: total; } .tile.tokens { grid-area: tokens; }
+  .tile.fallback { grid-area: fallback; } .tile.cost { grid-area: cost; }
+  .tile .label { font-family: var(--mono); font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+  .tile .value { font-size: 34px; font-weight: 800; letter-spacing: -0.03em; margin-top: 10px; font-variant-numeric: tabular-nums; }
+  .tile.hero-tile .value { font-size: clamp(52px, 7vw, 76px); line-height: 1; color: var(--gold); margin-top: 12px; }
+  .tile .sub { color: var(--muted); font-size: 13.5px; margin-top: 6px; }
+  .tile .sub b { color: var(--text); font-weight: 600; }
+  .tile .value.flash { animation: flash 400ms ease-out; }
+  @keyframes flash { 0% { opacity: .35; } 100% { opacity: 1; } }
+
+  /* ——— main two-column: playground + breakdown ——— */
+  .main { display: grid; grid-template-columns: 1.15fr 1fr; gap: 14px; margin-top: 14px; align-items: start; }
+  @media (max-width: 860px) { .main { grid-template-columns: 1fr; } }
+  .panel {
+    background: linear-gradient(180deg, var(--surface-2), var(--surface));
+    border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 24px; box-shadow: var(--shadow);
+  }
+  .panel h2 { margin: 0 0 6px; font-size: 19px; font-weight: 700; letter-spacing: -0.02em; }
+  .panel .panel-sub { color: var(--muted); font-size: 14px; margin: 0 0 18px; }
+  .panel h3 { margin: 22px 0 10px; font-size: 13px; font-weight: 600; letter-spacing: .04em; color: var(--muted); text-transform: uppercase; font-family: var(--mono); font-size: 11px; letter-spacing: .12em; }
+  .panel h3:first-of-type { margin-top: 4px; }
+
+  /* playground */
+  .playground { border-color: var(--gold-line); }
+  .playground .model-chip {
+    display: inline-flex; gap: 8px; align-items: center;
+    font-family: var(--mono); font-size: 12px; color: var(--muted);
+    border: 1px solid var(--line); border-radius: 999px; padding: 5px 11px; margin-bottom: 16px;
+    background: rgba(10,11,12,.5);
+  }
+  .playground .model-chip b { color: var(--gold); font-weight: 600; }
+  label.lbl { display: block; font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+  textarea, input[type=text] {
+    width: 100%; background: #0D0E10; border: 1px solid var(--line);
+    color: var(--text); border-radius: var(--radius-sm); padding: 13px 14px;
+    font-size: 15px; font-family: inherit; line-height: 1.55;
+    transition: border-color 200ms ease-out, box-shadow 200ms ease-out;
+  }
+  textarea { min-height: 84px; resize: vertical; }
+  textarea:focus, input[type=text]:focus { outline: none; border-color: var(--gold); box-shadow: 0 0 0 3px rgba(201,168,76,.18); }
+  .ask-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 14px; }
+  button.ask {
+    background: var(--gold); color: #0A0B0C; border: 0; border-radius: 999px;
+    padding: 12px 22px; font: 600 15px var(--font); letter-spacing: -0.01em; cursor: pointer;
+    box-shadow: 0 8px 24px -8px rgba(201,168,76,.55);
+    transition: transform 200ms ease-out, box-shadow 200ms ease-out, background 200ms ease-out, opacity 200ms;
+  }
+  button.ask:hover { transform: translateY(-1px); background: #D9BC63; }
+  button.ask:active { transform: scale(.98); transition-duration: 150ms; }
+  button.ask:disabled { opacity: .55; cursor: wait; transform: none; }
+  .hint { font-size: 12.5px; color: var(--faint); }
+  .hint kbd { font-family: var(--mono); font-size: 11px; background: var(--surface-3); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; padding: 1px 5px; color: var(--muted); }
+  #askMeta { font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+  #askMeta .hit-tag { color: var(--gold); font-weight: 600; }
+  #answer {
+    white-space: pre-wrap; background: #0D0E10; border: 1px solid var(--line);
+    border-radius: var(--radius-sm); padding: 16px; margin-top: 16px;
+    font-size: 15px; line-height: 1.65; min-height: 76px;
+    transition: border-color 200ms ease-out;
+  }
+  #answer.answered { border-color: var(--gold-line); }
+  #answer.thinking { color: var(--muted); }
+  .curl-box { margin-top: 16px; }
+  .curl-box summary { cursor: pointer; font-family: var(--mono); font-size: 12px; color: var(--muted); transition: color 200ms ease-out; }
+  .curl-box summary:hover { color: var(--text); }
+  .curl-box pre {
+    margin: 10px 0 0; padding: 14px; background: #0D0E10; border: 1px solid var(--line);
+    border-radius: var(--radius-sm); overflow-x: auto;
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.6; color: #D8D2C4; white-space: pre;
+  }
+  .curl-box pre .hl { color: var(--gold); }
+  .copy-btn {
+    margin-top: 10px; background: transparent; color: var(--muted);
+    border: 1px solid var(--line); border-radius: 999px; padding: 7px 14px;
+    font: 500 12.5px var(--font); cursor: pointer;
+    transition: color 200ms ease-out, border-color 200ms ease-out;
+  }
+  .copy-btn:hover { color: var(--text); border-color: rgba(250,247,242,.25); }
+
+  /* tables */
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 9px 4px; border-bottom: 1px solid var(--line); }
+  th { font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--faint); font-weight: 500; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.mono, th.mono { font-family: var(--mono); font-size: 13px; }
+  tbody tr { transition: background 150ms ease-out; }
+  tbody tr:hover { background: rgba(250,247,242,.03); }
+  tbody tr:last-child td { border-bottom: 0; }
+  .badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 600; font-family: var(--mono); letter-spacing: .03em; }
+  .badge.hit { background: var(--gold-soft); color: var(--gold); border: 1px solid var(--gold-line); }
+  .badge.miss { background: rgba(250,247,242,.06); color: var(--muted); border: 1px solid var(--line); }
+  .badge.fb { background: rgba(217,164,65,.12); color: var(--warn); border: 1px solid rgba(217,164,65,.3); }
+  .badge.rl { background: rgba(217,106,95,.12); color: var(--bad); border: 1px solid rgba(217,106,95,.3); }
+  .muted { color: var(--muted); font-size: 13px; }
+  .empty { color: var(--faint); font-size: 13.5px; padding: 12px 0; }
+
+  /* recent requests — full width */
+  .recent-wrap { margin-top: 14px; }
+  .recent-wrap .table-scroll { overflow-x: auto; }
+
+  footer {
+    max-width: 1160px; margin: 0 auto; padding: 36px 24px 44px;
+    color: var(--faint); font-size: 13px; line-height: 1.7;
+    display: flex; flex-wrap: wrap; gap: 8px 28px; justify-content: space-between;
+  }
+  footer code { font-family: var(--mono); font-size: 12px; color: var(--muted); background: var(--surface-2); padding: 2px 7px; border-radius: 6px; border: 1px solid var(--line); }
+  footer a { color: var(--muted); text-decoration: none; border-bottom: 1px solid var(--line); transition: color 200ms ease-out; }
+  footer a:hover { color: var(--gold); }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="topbar-inner">
+    <div>
+      <div class="brand">llm-gateway <em>·</em> <span style="color:var(--muted);font-weight:600">live</span></div>
+    </div>
+    <span class="brand-sub">OpenAI-compatible · local only</span>
+    <div class="topbar-spacer"></div>
+    <span class="live" id="livePill"><span class="dot" id="liveDot"></span><span id="liveText">checking…</span></span>
+  </div>
+</div>
+
+<div class="wrap">
+  <header class="hero">
+    <p class="eyebrow reveal">One API · local models · ₹0 per token</p>
+    <h1 class="reveal d1">Repeat questions <span class="gold">answer themselves.</span></h1>
+    <p class="lede reveal d2">llm-gateway is one OpenAI-compatible endpoint in front of your local Ollama models — with exact-match caching, automatic fallback, per-key rate limits and cost tracking. Ask below: the first answer comes from the model, the second comes from cache in milliseconds.</p>
+    <div class="hero-cta reveal d3">
+      <button class="cta" id="heroCta" type="button">Try the live playground ↓</button>
+      <span class="cta-note">Demo key <b>demo-key-12345</b> · no sign-up · nothing leaves this machine</span>
+    </div>
+    <div class="pipeline reveal d4" aria-label="Request pipeline">
+      <span>auth</span><span class="arrow">→</span><span>rate limit</span><span class="arrow">→</span><span class="hot">cache</span><span class="arrow">→</span><span>route</span><span class="arrow">→</span><span>fallback</span><span class="arrow">→</span><span>log</span>
+    </div>
+  </header>
+
+  <!-- Bento stats -->
+  <section class="bento reveal d2" aria-label="Live gateway statistics">
+    <div class="tile hero-tile">
+      <div>
+        <div class="label">Cache hit rate</div>
+        <div class="value" id="hitRate">–</div>
+      </div>
+      <div class="sub" id="cacheSub">–</div>
+    </div>
+    <div class="tile total">
+      <div class="label">Total requests</div>
+      <div class="value" id="total">–</div>
+      <div class="sub" id="avgLatency">–</div>
+    </div>
+    <div class="tile tokens">
+      <div class="label">Total tokens</div>
+      <div class="value" id="tokens">–</div>
+      <div class="sub" id="tokensSub">–</div>
+    </div>
+    <div class="tile fallback">
+      <div class="label">Fallback events</div>
+      <div class="value" id="fallbacks">–</div>
+      <div class="sub">primary failed → fallback answered</div>
+    </div>
+    <div class="tile cost">
+      <div class="label">Estimated cost</div>
+      <div class="value" id="cost">–</div>
+      <div class="sub" id="errorsSub">local models = ₹0</div>
+    </div>
+    <!-- rate-limit hits live in the recent-requests table and /stats; the
+         bento keeps five tiles so the cache hit rate stays the hero. -->
+    <span id="rateLimited" hidden>0</span>
+  </section>
+
+  <div class="main">
+    <!-- Playground — the hero is the working product -->
+    <section class="panel playground reveal d3" id="playground" aria-label="Playground">
+      <h2>Try it — playground</h2>
+      <p class="panel-sub">A real answer from the local model, through the real gateway. Ask the same question twice and watch the second one come back as a cache hit.</p>
+      <span class="model-chip">model <b>qwen2.5-3b</b> · Ollama <b>qwen2.5:3b-instruct</b> · key <b>demo</b></span>
+      <label class="lbl" for="prompt">Your question</label>
+      <textarea id="prompt">What is an LLM gateway, in one sentence?</textarea>
+      <div class="ask-row">
+        <button class="ask" id="askBtn" onclick="ask()">Ask the model →</button>
+        <span id="askMeta"></span>
+      </div>
+      <p class="hint"><kbd>Ctrl</kbd> + <kbd>Enter</kbd> to ask · first answer takes a few seconds (the local model is thinking); repeats are instant</p>
+      <div id="answer">The answer will appear here. Identical prompts return the cached answer instantly — try asking twice.</div>
+      <details class="curl-box">
+        <summary>Same request as curl — copy it</summary>
+        <pre><span class="hl">curl</span> -X POST http://127.0.0.1:8000/v1/chat/completions \
+  -H <span class="hl">"Authorization: Bearer demo-key-12345"</span> \
+  -H "Content-Type: application/json" \
+  -d <span class="hl">'{"model": "qwen2.5-3b",
+      "messages": [{"role": "user",
+      "content": "What is an LLM gateway, in one sentence?"}]}'</span></pre>
+        <button class="copy-btn" id="copyCurl" type="button">Copy curl command</button>
+      </details>
+    </section>
+
+    <!-- Breakdown -->
+    <section class="panel reveal d3" aria-label="Usage breakdown">
+      <h3>Requests by model</h3>
+      <table><thead><tr><th>Model</th><th class="num">Requests</th><th class="num">Prompt tok.</th><th class="num">Compl. tok.</th></tr></thead>
+      <tbody id="perModel"><tr><td colspan="4" class="muted">No requests yet.</td></tr></tbody></table>
+      <h3>Requests by API key</h3>
+      <table><thead><tr><th>Key</th><th class="num">Requests</th></tr></thead>
+      <tbody id="perKey"><tr><td colspan="2" class="muted">No requests yet.</td></tr></tbody></table>
+      <h3>Guardrails</h3>
+      <table><tbody>
+        <tr><td>Rate-limit hits (429)</td><td class="num" id="rateLimitedCell">0</td></tr>
+        <tr><td>Model errors</td><td class="num" id="errorsCell">0</td></tr>
+      </tbody></table>
+      <p class="empty" style="margin-top:14px">Every number on this page comes from <code style="font-family:var(--mono);font-size:12px;color:var(--muted)">GET /stats</code> — the same JSON any client can read. Refreshes every 5&nbsp;s.</p>
+    </section>
+  </div>
+
+  <section class="panel recent-wrap reveal d4" aria-label="Recent requests">
+    <h2>Recent requests</h2>
+    <p class="panel-sub">The last 20 requests through the gateway — hits, misses, fallbacks and 429s, as they happened.</p>
+    <div class="table-scroll">
+      <table><thead><tr><th>Time</th><th>Key</th><th>Model</th><th>Used</th><th>Status</th><th class="num">Tokens</th><th class="num">Latency</th></tr></thead>
+      <tbody id="recent"><tr><td colspan="7" class="muted">No requests yet.</td></tr></tbody></table>
+    </div>
+  </section>
+</div>
+
+<footer>
+  <span>Refreshes every 5 s · <code>GET /stats</code> returns the same numbers as JSON · <code>GET /health</code> checks Ollama</span>
+  <span>FastAPI + SQLite + Ollama · No paid APIs, no data leaves this machine · llm-gateway</span>
+</footer>
+
+<script>
+const DEMO_KEY = "demo-key-12345";
+const fmt = n => (n === null || n === undefined) ? "–" : Number(n).toLocaleString("en-IN");
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+function flash(el) { el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash"); }
+
+async function refresh() {
+  try {
+    const r = await fetch("/stats", { headers: { "Authorization": "Bearer " + DEMO_KEY }});
+    if (!r.ok) return;
+    const s = await r.json();
+    const set = (id, val) => { const el = document.getElementById(id); if (el.textContent !== val) { el.textContent = val; flash(el); } };
+    set("total", fmt(s.total_requests));
+    set("hitRate", (s.cache_hit_rate * 100).toFixed(1) + "%");
+    document.getElementById("cacheSub").innerHTML = `<b>${fmt(s.cache_hits)}</b> hits · <b>${fmt(s.cache_entries)}</b> cached answers stored`;
+    set("fallbacks", fmt(s.fallback_events));
+    document.getElementById("rateLimited").textContent = fmt(s.rate_limit_hits);
+    document.getElementById("rateLimitedCell").textContent = fmt(s.rate_limit_hits);
+    document.getElementById("errorsCell").textContent = fmt(s.errors);
+    document.getElementById("errorsSub").textContent = `${fmt(s.errors)} model errors · ${fmt(s.rate_limit_hits)} rate-limit hits (429) · local models = ₹0`;
+    set("tokens", fmt(s.total_tokens));
+    document.getElementById("tokensSub").textContent = `${fmt(s.prompt_tokens)} prompt + ${fmt(s.completion_tokens)} completion`;
+    set("cost", "₹" + Number(s.estimated_cost_inr).toFixed(2));
+    document.getElementById("avgLatency").textContent = "avg " + fmt(Math.round(s.avg_latency_ms)) + " ms (uncached)";
+    const pm = document.getElementById("perModel");
+    pm.innerHTML = s.per_model.length ? s.per_model.map(m =>
+      `<tr><td class="mono">${esc(m.model)}</td><td class="num">${fmt(m.requests)}</td><td class="num">${fmt(m.prompt_tokens)}</td><td class="num">${fmt(m.completion_tokens)}</td></tr>`).join("") : `<tr><td colspan="4" class="muted">No requests yet.</td></tr>`;
+    const pk = document.getElementById("perKey");
+    pk.innerHTML = s.per_key.length ? s.per_key.map(k =>
+      `<tr><td class="mono">${esc(k.key_name)}</td><td class="num">${fmt(k.requests)}</td></tr>`).join("") : `<tr><td colspan="2" class="muted">No requests yet.</td></tr>`;
+    const rc = document.getElementById("recent");
+    rc.innerHTML = s.recent_requests.length ? s.recent_requests.map(r => {
+      const t = new Date(r.ts * 1000).toLocaleTimeString("en-IN");
+      let badge = `<span class="badge miss">MISS</span>`;
+      if (r.rate_limited) badge = `<span class="badge rl">429</span>`;
+      else if (r.error) badge = `<span class="badge rl">ERROR</span>`;
+      else if (r.cached) badge = `<span class="badge hit">CACHE HIT</span>`;
+      else if (r.fallback_used) badge = `<span class="badge fb">FALLBACK</span>`;
+      return `<tr><td class="mono">${t}</td><td class="mono">${esc(r.api_key_name)}</td><td class="mono">${esc(r.gateway_model)}</td><td class="mono">${esc(r.model_used || "—")}</td><td>${badge}</td><td class="num">${fmt(r.prompt_tokens + r.completion_tokens)}</td><td class="num">${fmt(r.latency_ms)} ms</td></tr>`;
+    }).join("") : `<tr><td colspan="7" class="muted">No requests yet.</td></tr>`;
+    setLive(true);
+  } catch (e) { setLive(false); /* gateway down: leave last numbers on screen */ }
+}
+
+function setLive(ok) {
+  const dot = document.getElementById("liveDot");
+  const txt = document.getElementById("liveText");
+  dot.classList.toggle("down", !ok);
+  txt.textContent = ok ? "gateway live · Ollama connected" : "gateway unreachable";
+}
+
+async function ask() {
+  const btn = document.getElementById("askBtn");
+  const prompt = document.getElementById("prompt").value.trim();
+  const answer = document.getElementById("answer");
+  const meta = document.getElementById("askMeta");
+  if (!prompt) { answer.textContent = "Type a question first."; return; }
+  btn.disabled = true; btn.textContent = "Thinking… (local 3B model, first run loads the model)";
+  answer.textContent = "…";
+  answer.classList.add("thinking"); answer.classList.remove("answered");
+  const t0 = performance.now();
+  try {
+    const r = await fetch("/v1/chat/completions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Authorization": "Bearer " + DEMO_KEY },
+      body: JSON.stringify({ model: "qwen2.5-3b", messages: [{ role: "user", content: prompt }] })
+    });
+    const data = await r.json();
+    const ms = Math.round(performance.now() - t0);
+    if (!r.ok) { answer.textContent = "Error " + r.status + ": " + (data.error && data.error.message || JSON.stringify(data)); }
+    else {
+      answer.textContent = data.choices[0].message.content;
+      answer.classList.add("answered");
+      const g = data.gateway || {};
+      meta.innerHTML = ` · ${ms} ms · ${g.cached ? '<span class="hit-tag">CACHE HIT ⚡</span>' : "fresh from model"}${g.fallback_used ? " · FALLBACK used" : ""} · ${data.usage.total_tokens} tokens`;
+    }
+  } catch (e) { answer.textContent = "Request failed: " + e.message; }
+  answer.classList.remove("thinking");
+  btn.disabled = false; btn.textContent = "Ask the model →";
+  refresh();
+}
+
+document.getElementById("prompt").addEventListener("keydown", e => {
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); ask(); }
+});
+document.getElementById("heroCta").addEventListener("click", () => {
+  document.getElementById("playground").scrollIntoView({ behavior: "smooth", block: "center" });
+  document.getElementById("prompt").focus({ preventScroll: true });
+});
+document.getElementById("copyCurl").addEventListener("click", async e => {
+  const pre = e.target.closest(".curl-box").querySelector("pre").innerText;
+  try { await navigator.clipboard.writeText(pre); e.target.textContent = "Copied ✓"; }
+  catch { e.target.textContent = "Copy failed — select the text manually"; }
+  setTimeout(() => { e.target.textContent = "Copy curl command"; }, 2000);
+});
+refresh();
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

@@ -1,0 +1,35 @@
+# TEST ONLY config for scripts/verify.py — rate-limit proof.
+# Demo key allowed only 3 requests/minute, so the 4th rapid call must 429.
+# Never used by run.sh.
+server:
+  host: "127.0.0.1"
+  port: 8002
+ollama:
+  base_url: "http://localhost:11434"
+  timeout_seconds: 300
+models:
+  primary:
+    gateway_name: "qwen2.5-3b"
+    ollama_model: "qwen2.5:3b-instruct"
+    aliases: ["chat", "default"]
+  fallback:
+    gateway_name: "qwen2.5-3b-fallback"
+    ollama_model: "qwen2.5:3b-instruct"
+    aliases: ["fallback"]
+auth:
+  keys:
+    - key: "demo-key-12345"
+      name: "demo"
+      note: "DEMO key"
+      requests_per_minute: 3
+rate_limit:
+  default_requests_per_minute: 3
+cache:
+  enabled: true
+  ttl_seconds: 3600
+pricing_inr_per_1k_tokens:
+  "qwen2.5-3b": { prompt: 0.0, completion: 0.0 }
+  "qwen2.5-3b-fallback": { prompt: 0.0, completion: 0.0 }
+  "default": { prompt: 0.0, completion: 0.0 }
+storage:
+  db_path: "data/gateway-test-ratelimit.db"

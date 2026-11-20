@@ -1,0 +1,75 @@
+# llm-gateway — configuration
+# One file drives routing, auth, limits, cache and pricing. No paid keys here:
+# every backend below is a local Ollama model, so every price is ₹0.
+
+server:
+  host: "127.0.0.1"
+  port: 8000
+
+ollama:
+  # Base URL of the local Ollama server. Start it with `ollama serve`
+  # (it must already have the models below downloaded — no `ollama pull`).
+  base_url: "http://localhost:11434"
+  # Seconds to wait for a chat completion. The local 3B model on CPU is
+  # slow on first load (model warm-up), so this is generous on purpose.
+  timeout_seconds: 300
+
+# Model routing: gateway name -> Ollama model.
+# Clients ask for the gateway name; the gateway translates it.
+# `fallback` is tried automatically when `primary` fails (see README).
+models:
+  # Primary chat model. Alias "chat" is the default when a client sends
+  # model "qwen2.5-3b" or "chat".
+  primary:
+    gateway_name: "qwen2.5-3b"
+    ollama_model: "qwen2.5:3b-instruct"
+    aliases: ["chat", "default"]
+  fallback:
+    gateway_name: "qwen2.5-3b-fallback"
+    ollama_model: "qwen2.5:3b-instruct"
+    aliases: ["fallback"]
+    # HONEST NOTE: only one model (qwen2.5:3b-instruct) is downloaded on
+    # this machine, so the fallback entry points at the same Ollama
+    # model under a different gateway alias. The fallback *mechanism*
+    # (detect failure -> retry with the fallback entry -> flag it in the
+    # response) is fully real and is verified in scripts/verify.py by
+    # pointing `primary` at a model that does not exist. Add a second
+    # downloaded model (e.g. llama3.2:3b) here and the fallback becomes
+    # a genuinely different model with zero code changes.
+
+# API keys. Rotate these before exposing the gateway beyond localhost.
+# The demo key is for trying the gateway and the dashboard playground.
+auth:
+  keys:
+    - key: "demo-key-12345"
+      name: "demo"
+      note: "DEMO key — public, for local try-outs only. Do not use in production."
+      requests_per_minute: 60
+    - key: "dev-key-67890"
+      name: "dev"
+      note: "Example second key with its own (lower) limit, to show per-key limits."
+      requests_per_minute: 10
+
+# Defaults applied when a key has no explicit requests_per_minute.
+rate_limit:
+  default_requests_per_minute: 30
+
+cache:
+  enabled: true
+  # Identical (model + messages + temperature + max_tokens) requests are
+  # served from SQLite for this long. 0 = never expire.
+  ttl_seconds: 3600
+
+# Price table used ONLY for the estimated-cost column in /stats and the
+# dashboard. Local Ollama models cost nothing to run beyond electricity,
+# so every entry is ₹0 — labelled as such. To model a paid backend later,
+# put its real per-1k-token prices here (INR) and the same code will
+# start reporting non-zero estimated cost.
+pricing_inr_per_1k_tokens:
+  "qwen2.5-3b": { prompt: 0.0, completion: 0.0 }
+  "qwen2.5-3b-fallback": { prompt: 0.0, completion: 0.0 }
+  "default": { prompt: 0.0, completion: 0.0 }
+
+storage:
+  # SQLite file for the response cache + request log. Created on first run.
+  db_path: "data/gateway.db"
